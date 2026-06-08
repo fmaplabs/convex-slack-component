@@ -18,21 +18,26 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
       - name: Node setup
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          cache-dependency-path: package.json
+          cache-dependency-path: pnpm-lock.yaml
           node-version: "24.x"
-          cache: "npm"
+          cache: "pnpm"
 
       - name: Install and build
         run: |
-          npm i
-          npm run build
+          pnpm install --frozen-lockfile
+          pnpm run build
       - name: Publish package for testing branch
-        run: npx pkg-pr-new publish || echo "pkg-pr-new failed"
+        run: pnpm dlx pkg-pr-new publish || echo "pkg-pr-new failed"
       - name: Test
         run: |
-          npm run test
-          npm run typecheck
-          npm run lint
+          pnpm run test
+          pnpm run typecheck
+          pnpm run lint
