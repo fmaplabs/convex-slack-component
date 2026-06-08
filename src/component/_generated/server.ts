@@ -35,7 +35,11 @@ import type { DataModel } from "./dataModel.js";
  */
 type Env = {
   readonly SLACK_BOT_TOKEN: string | undefined;
+  readonly SLACK_CLIENT_ID: string | undefined;
+  readonly SLACK_CLIENT_SECRET: string | undefined;
   readonly SLACK_DEFAULT_CHANNEL: string | undefined;
+  readonly SLACK_INSTALL_SUCCESS_URL: string | undefined;
+  readonly SLACK_SCOPES: string | undefined;
   readonly SLACK_WEBHOOK_URL: string | undefined;
 };
 

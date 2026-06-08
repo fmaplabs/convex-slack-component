@@ -24,6 +24,13 @@ import type { FunctionReference } from "convex/server";
 export type ComponentApi<Name extends string | undefined = string | undefined> =
   {
     lib: {
+      completeOAuth: FunctionReference<
+        "action",
+        "internal",
+        { code: string; state: string },
+        { ok: true; successUrl?: string } | { error: string; ok: false },
+        Name
+      >;
       enqueue: FunctionReference<
         "mutation",
         "internal",
@@ -31,10 +38,18 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           blocks?: any;
           channel?: string;
           idempotencyKey?: string;
+          teamId?: string;
           text?: string;
-          transport?: "webhook" | "botToken";
+          transport?: "webhook" | "botToken" | "oauth";
         },
         string | null,
+        Name
+      >;
+      installRedirect: FunctionReference<
+        "action",
+        "internal",
+        { redirectUri: string },
+        { location: string } | { error: string },
         Name
       >;
       list: FunctionReference<
@@ -51,8 +66,9 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           idempotencyKey?: string;
           slackTs?: string;
           status: "pending" | "sent" | "failed" | "skipped";
+          teamId?: string;
           text?: string;
-          transport: "webhook" | "botToken";
+          transport: "webhook" | "botToken" | "oauth";
           workId?: string;
         }>,
         Name

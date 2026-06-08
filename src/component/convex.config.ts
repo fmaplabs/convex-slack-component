@@ -12,6 +12,11 @@ const component = defineComponent("slack", {
     SLACK_WEBHOOK_URL: v.optional(v.string()),
     SLACK_BOT_TOKEN: v.optional(v.string()),
     SLACK_DEFAULT_CHANNEL: v.optional(v.string()),
+    // OAuth "Add to Slack" installation flow (all optional → unconfigured = no-op).
+    SLACK_CLIENT_ID: v.optional(v.string()),
+    SLACK_CLIENT_SECRET: v.optional(v.string()),
+    SLACK_SCOPES: v.optional(v.string()), // comma-separated bot scopes
+    SLACK_INSTALL_SUCCESS_URL: v.optional(v.string()), // post-install redirect
   },
 });
 

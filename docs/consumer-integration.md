@@ -115,6 +115,11 @@ Notes:
   `` `${contractId}:${op}:${jobId}` `` or the audit-row id.
 - `buildContractBlocks` is pure and lives next to the existing label mappers — no
   Block Kit builders are provided by the component (pass-through by design).
+- **Link URLs must be absolute.** Slack only renders `<url|label>` mrkdwn as a link
+  when `url` includes an `https://` scheme; a scheme-less value (e.g.
+  `d-cargo.fmaplabs.dev/contracts/123`) is printed **literally**, brackets and pipe
+  and all. Build the href as `` url.startsWith("http") ? url : `https://${url}` ``
+  before embedding it.
 
 ---
 
@@ -237,12 +242,30 @@ turn deployments on one at a time by setting their env vars.
 
 `slack.send(ctx, message)` accepts:
 
-| field            | type                       | notes                                             |
-| ---------------- | -------------------------- | ------------------------------------------------- |
-| `text`           | `string?`                  | plain-text fallback; always send one              |
-| `blocks`         | `unknown[]?`               | arbitrary Block Kit (pass-through)                |
-| `channel`        | `string?`                  | bot-token only; webhook channel is fixed by URL   |
-| `idempotencyKey` | `string?`                  | repeat call with same key is a no-op              |
-| `transport`      | `"webhook" \| "botToken"?` | force a transport; default prefers the bot token  |
+| field            | type                                  | notes                                             |
+| ---------------- | ------------------------------------- | ------------------------------------------------- |
+| `text`           | `string?`                             | plain-text fallback; always send one              |
+| `blocks`         | `unknown[]?`                          | arbitrary Block Kit (pass-through)                |
+| `channel`        | `string?`                             | bot-token / oauth; webhook channel is fixed by URL |
+| `teamId`         | `string?`                             | **required for `oauth`**; the installed workspace  |
+| `idempotencyKey` | `string?`                             | repeat call with same key is a no-op              |
+| `transport`      | `"webhook" \| "botToken" \| "oauth"?` | force a transport; default prefers the bot token  |
 
 Returns the message id, or `null` when no transport is configured (no-op).
+
+---
+
+## Appendix — OAuth "Add to Slack" (multi-workspace)
+
+The fmap backend is single-org, so it uses the webhook / bot-token transports above.
+If you ever need end users to install the app into **their own** workspaces (each with
+its own bot token), the component also ships an `oauth` transport + install flow:
+
+- Bind four more env vars in `convex.config.ts`: `SLACK_CLIENT_ID`,
+  `SLACK_CLIENT_SECRET`, `SLACK_SCOPES`, `SLACK_INSTALL_SUCCESS_URL` (same by-reference
+  pattern as step 1).
+- Mount `slack.handleInstall` / `slack.handleOAuthRedirect` in your `convex/http.ts`.
+- Send with `slack.send(ctx, { text, teamId, transport: "oauth" })`.
+
+See the README "OAuth installation" section and `data-flow.md`. Tokens are stored
+plaintext (see `architecture.md`).

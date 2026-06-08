@@ -1,6 +1,7 @@
 import { v, type Infer } from "convex/values";
 import { Workpool, vOnCompleteArgs } from "@convex-dev/workpool";
 import {
+  action,
   internalAction,
   internalMutation,
   internalQuery,
@@ -29,21 +30,83 @@ const pool = new Workpool(components.sendWorkpool, {
 // Pure, unit-testable helpers
 // ---------------------------------------------------------------------------
 
-export type Transport = "webhook" | "botToken";
+export type Transport = "webhook" | "botToken" | "oauth";
 
-type Env = { SLACK_BOT_TOKEN?: string; SLACK_WEBHOOK_URL?: string };
+type Env = {
+  SLACK_BOT_TOKEN?: string;
+  SLACK_WEBHOOK_URL?: string;
+  SLACK_CLIENT_ID?: string;
+  SLACK_CLIENT_SECRET?: string;
+};
 
 /**
  * Resolve which transport to use. Bot token is preferred when both are set.
  * A per-call `override` must still have its credential configured, otherwise
  * (and when nothing is configured) we return null → the caller no-ops.
+ *
+ * `oauth` is multi-tenant-ambiguous (which workspace?), so it never auto-selects
+ * — it's only chosen via an explicit override, and only when OAuth client creds
+ * are configured. The addressing `teamId` is validated in `enqueue`.
  */
 export function selectTransport(env: Env, override?: Transport): Transport | null {
+  if (override === "oauth")
+    return env.SLACK_CLIENT_ID && env.SLACK_CLIENT_SECRET ? "oauth" : null;
   if (override === "botToken") return env.SLACK_BOT_TOKEN ? "botToken" : null;
   if (override === "webhook") return env.SLACK_WEBHOOK_URL ? "webhook" : null;
   if (env.SLACK_BOT_TOKEN) return "botToken";
   if (env.SLACK_WEBHOOK_URL) return "webhook";
   return null;
+}
+
+/** Build the Slack OAuth v2 consent-screen URL the install link redirects to. */
+export function buildAuthorizeUrl(opts: {
+  clientId: string;
+  scopes: string;
+  state: string;
+  redirectUri: string;
+}): string {
+  const params = new URLSearchParams({
+    client_id: opts.clientId,
+    scope: opts.scopes,
+    state: opts.state,
+    redirect_uri: opts.redirectUri,
+  });
+  return `https://slack.com/oauth/v2/authorize?${params.toString()}`;
+}
+
+/** Installation record derived from a Slack `oauth.v2.access` response. */
+export type Installation = {
+  teamId?: string;
+  enterpriseId?: string;
+  isEnterpriseInstall: boolean;
+  botToken: string;
+  botUserId?: string;
+  appId?: string;
+  scope?: string;
+  authedUserId?: string;
+};
+
+/** Map Slack's `oauth.v2.access` JSON onto an installation record. */
+export function parseOAuthAccessResponse(json: {
+  access_token?: string;
+  bot_user_id?: string;
+  app_id?: string;
+  scope?: string;
+  team?: { id?: string } | null;
+  enterprise?: { id?: string } | null;
+  is_enterprise_install?: boolean;
+  authed_user?: { id?: string } | null;
+}): Installation {
+  return {
+    teamId: json.team?.id ?? undefined,
+    enterpriseId: json.enterprise?.id ?? undefined,
+    isEnterpriseInstall: json.is_enterprise_install ?? false,
+    botToken: json.access_token ?? "",
+    botUserId: json.bot_user_id,
+    appId: json.app_id,
+    scope: json.scope,
+    authedUserId: json.authed_user?.id,
+  };
 }
 
 /** Incoming Webhook payload — channel is fixed by the webhook URL. */
@@ -106,6 +169,47 @@ const vSendResult = v.union(
 type SendResult = Infer<typeof vSendResult>;
 
 /**
+ * POST to `chat.postMessage` with a bearer token. Shared by the `botToken` and
+ * `oauth` transports — both hit the Web API, differing only in where the token
+ * comes from. Throws on retryable failures (network / 429 / 5xx); returns
+ * `{ ok: false }` on permanent ones.
+ */
+async function postMessageViaWebApi(
+  token: string,
+  body: Record<string, unknown>,
+): Promise<SendResult> {
+  let response: Response;
+  try {
+    response = await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    // Network-level failure → retryable.
+    throw new Error(`slack chat.postMessage fetch failed: ${String(e)}`);
+  }
+  const httpStatus = response.status;
+  if (httpStatus === 429 || httpStatus >= 500) {
+    throw new Error(`slack chat.postMessage http ${httpStatus}`);
+  }
+  // The Web API returns HTTP 200 even on logical failure — inspect `ok`.
+  const json = (await response.json().catch(() => ({}))) as {
+    ok?: boolean;
+    ts?: string;
+    error?: string;
+  };
+  if (json.ok) return { ok: true, httpStatus, ts: json.ts };
+  if (classifyFailure(httpStatus, json) === "retryable") {
+    throw new Error(`slack chat.postMessage error: ${json.error ?? "unknown"}`);
+  }
+  return { ok: false, httpStatus, error: json.error ?? "unknown_error" };
+}
+
+/**
  * Transactional enqueue. Runs in the *caller's* transaction when invoked via
  * `ctx.runMutation` from an app mutation: the row insert and the workpool
  * enqueue roll back together if the app mutation throws.
@@ -119,6 +223,7 @@ export const enqueue = mutation({
     text: v.optional(v.string()),
     blocks: v.optional(v.any()),
     channel: v.optional(v.string()),
+    teamId: v.optional(v.string()),
     idempotencyKey: v.optional(v.string()),
     transport: v.optional(vTransport),
   },
@@ -130,6 +235,13 @@ export const enqueue = mutation({
       return null;
     }
 
+    // OAuth delivery is multi-tenant: the caller must say which workspace.
+    if (transport === "oauth" && !args.teamId) {
+      throw new Error(
+        "transport 'oauth' requires a teamId to address an installed workspace",
+      );
+    }
+
     const key = args.idempotencyKey;
     if (key !== undefined) {
       const existing = await ctx.db
@@ -139,15 +251,18 @@ export const enqueue = mutation({
       if (existing) return existing._id;
     }
 
+    // Both Web API transports (botToken, oauth) need a channel; the webhook's
+    // channel is fixed by its URL.
     const channel =
-      transport === "botToken"
-        ? (args.channel ?? process.env.SLACK_DEFAULT_CHANNEL)
-        : undefined;
+      transport === "webhook"
+        ? undefined
+        : (args.channel ?? process.env.SLACK_DEFAULT_CHANNEL);
 
     const id = await ctx.db.insert("messages", {
       text: args.text,
       blocks: args.blocks,
       channel,
+      teamId: transport === "oauth" ? args.teamId : undefined,
       transport,
       idempotencyKey: args.idempotencyKey,
       status: "pending",
@@ -183,36 +298,18 @@ export const send = internalAction({
     if (row.transport === "botToken") {
       const token = process.env.SLACK_BOT_TOKEN;
       if (!token) return { ok: false, error: "missing_bot_token" };
+      return await postMessageViaWebApi(token, postMessageBody(row));
+    }
 
-      let response: Response;
-      try {
-        response = await fetch("https://slack.com/api/chat.postMessage", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json; charset=utf-8",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify(postMessageBody(row)),
-        });
-      } catch (e) {
-        // Network-level failure → retryable.
-        throw new Error(`slack chat.postMessage fetch failed: ${String(e)}`);
-      }
-      const httpStatus = response.status;
-      if (httpStatus === 429 || httpStatus >= 500) {
-        throw new Error(`slack chat.postMessage http ${httpStatus}`);
-      }
-      // The Web API returns HTTP 200 even on logical failure — inspect `ok`.
-      const json = (await response.json().catch(() => ({}))) as {
-        ok?: boolean;
-        ts?: string;
-        error?: string;
-      };
-      if (json.ok) return { ok: true, httpStatus, ts: json.ts };
-      if (classifyFailure(httpStatus, json) === "retryable") {
-        throw new Error(`slack chat.postMessage error: ${json.error ?? "unknown"}`);
-      }
-      return { ok: false, httpStatus, error: json.error ?? "unknown_error" };
+    if (row.transport === "oauth") {
+      if (!row.teamId) return { ok: false, error: "missing_team_id" };
+      // Look up the token at delivery time so reinstalls are picked up.
+      const token: string | null = await ctx.runQuery(
+        internal.lib.getInstallationToken,
+        { teamId: row.teamId },
+      );
+      if (!token) return { ok: false, error: "no_installation" };
+      return await postMessageViaWebApi(token, postMessageBody(row));
     }
 
     // Incoming Webhook.
@@ -297,6 +394,203 @@ export const markSkipped = internalMutation({
       status: "skipped",
       ...(error ? { error } : {}),
     });
+  },
+});
+
+// ---------------------------------------------------------------------------
+// OAuth installation flow
+// ---------------------------------------------------------------------------
+
+// A consumed state older than this is rejected (CSRF / stale-link protection).
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Persist a CSRF nonce for the install → callback round-trip. The nonce itself
+ * is generated in the httpAction (Web Crypto), not here — transactional
+ * randomness is restricted.
+ */
+export const insertOAuthState = internalMutation({
+  args: { state: v.string(), redirectUri: v.string() },
+  handler: async (ctx, { state, redirectUri }) => {
+    await ctx.db.insert("oauthStates", {
+      state,
+      redirectUri,
+      createdAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * Look up a state nonce, delete it (single-use), and reject if missing or
+ * expired. Returns the stored `redirectUri` — the exact value sent to Slack at
+ * authorize time, which must be replayed byte-for-byte at token exchange.
+ */
+export const consumeOAuthState = internalMutation({
+  args: { state: v.string() },
+  returns: v.union(v.object({ redirectUri: v.string() }), v.null()),
+  handler: async (ctx, { state }) => {
+    const row = await ctx.db
+      .query("oauthStates")
+      .withIndex("by_state", (q) => q.eq("state", state))
+      .unique();
+    if (!row) return null;
+    await ctx.db.delete("oauthStates", row._id);
+    if (Date.now() - row.createdAt > OAUTH_STATE_TTL_MS) return null;
+    return { redirectUri: row.redirectUri };
+  },
+});
+
+/**
+ * Insert or replace the installation for a workspace (keyed by `teamId`, or
+ * `enterpriseId` for org-wide installs) so reinstalls overwrite the old token.
+ */
+export const upsertInstallation = internalMutation({
+  args: {
+    teamId: v.optional(v.string()),
+    enterpriseId: v.optional(v.string()),
+    isEnterpriseInstall: v.boolean(),
+    botToken: v.string(),
+    botUserId: v.optional(v.string()),
+    appId: v.optional(v.string()),
+    scope: v.optional(v.string()),
+    authedUserId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const existing =
+      args.isEnterpriseInstall && args.enterpriseId
+        ? await ctx.db
+            .query("installations")
+            .withIndex("by_enterpriseId", (q) =>
+              q.eq("enterpriseId", args.enterpriseId),
+            )
+            .unique()
+        : args.teamId
+          ? await ctx.db
+              .query("installations")
+              .withIndex("by_teamId", (q) => q.eq("teamId", args.teamId))
+              .unique()
+          : null;
+
+    const row = { ...args, installedAt: Date.now() };
+    if (existing) {
+      await ctx.db.replace("installations", existing._id, row);
+    } else {
+      await ctx.db.insert("installations", row);
+    }
+  },
+});
+
+/** Fetch a workspace's stored bot token (by `teamId`, or `enterpriseId`). */
+export const getInstallationToken = internalQuery({
+  args: { teamId: v.optional(v.string()), enterpriseId: v.optional(v.string()) },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, { teamId, enterpriseId }) => {
+    let row = null;
+    if (enterpriseId) {
+      row = await ctx.db
+        .query("installations")
+        .withIndex("by_enterpriseId", (q) => q.eq("enterpriseId", enterpriseId))
+        .unique();
+    }
+    if (!row && teamId) {
+      row = await ctx.db
+        .query("installations")
+        .withIndex("by_teamId", (q) => q.eq("teamId", teamId))
+        .unique();
+    }
+    return row?.botToken ?? null;
+  },
+});
+
+/**
+ * Begin the "Add to Slack" flow. The host app's HTTP route calls this from its
+ * own `httpAction` (via `slack.handleInstall`) and 302s the user to `location`.
+ *
+ * Public so the host app can call it through `components.slack.lib.*` — it reads
+ * the component-bound OAuth env so credentials never pass through the client.
+ * `redirectUri` is derived from the request URL by the client (it's the only
+ * party that sees it) and replayed verbatim at token exchange.
+ */
+export const installRedirect = action({
+  args: { redirectUri: v.string() },
+  returns: v.union(
+    v.object({ location: v.string() }),
+    v.object({ error: v.string() }),
+  ),
+  handler: async (ctx, { redirectUri }) => {
+    const clientId = process.env.SLACK_CLIENT_ID;
+    const scopes = process.env.SLACK_SCOPES;
+    // Require the secret here too: it isn't used until the callback, but failing
+    // now beats sending the user through consent only to fail at the exchange.
+    if (!clientId || !scopes || !process.env.SLACK_CLIENT_SECRET) {
+      return {
+        error:
+          "Slack OAuth is not configured: set SLACK_CLIENT_ID, SLACK_CLIENT_SECRET, and SLACK_SCOPES.",
+      };
+    }
+    // Web Crypto is available in the (non-Node) action runtime; randomness is
+    // fine here because actions aren't transactional.
+    const state = crypto.randomUUID();
+    await ctx.runMutation(internal.lib.insertOAuthState, { state, redirectUri });
+    return { location: buildAuthorizeUrl({ clientId, scopes, state, redirectUri }) };
+  },
+});
+
+/**
+ * Complete the OAuth callback: validate `state`, exchange `code` for a bot
+ * token, and persist the installation. Returns `successUrl` (the configured
+ * post-install redirect, if any) so the client can finish the browser flow.
+ */
+export const completeOAuth = action({
+  args: { code: v.string(), state: v.string() },
+  returns: v.union(
+    v.object({ ok: v.literal(true), successUrl: v.optional(v.string()) }),
+    v.object({ ok: v.literal(false), error: v.string() }),
+  ),
+  handler: async (ctx, { code, state }) => {
+    const consumed: { redirectUri: string } | null = await ctx.runMutation(
+      internal.lib.consumeOAuthState,
+      { state },
+    );
+    if (!consumed) return { ok: false as const, error: "invalid_or_expired_state" };
+
+    const clientId = process.env.SLACK_CLIENT_ID;
+    const clientSecret = process.env.SLACK_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      return { ok: false as const, error: "not_configured" };
+    }
+
+    const response = await fetch("https://slack.com/api/oauth.v2.access", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: consumed.redirectUri,
+      }),
+    });
+    const json = (await response.json().catch(() => ({}))) as {
+      ok?: boolean;
+      error?: string;
+      access_token?: string;
+      bot_user_id?: string;
+      app_id?: string;
+      scope?: string;
+      team?: { id?: string } | null;
+      enterprise?: { id?: string } | null;
+      is_enterprise_install?: boolean;
+      authed_user?: { id?: string } | null;
+    };
+    if (!json.ok) {
+      return { ok: false as const, error: json.error ?? "oauth_exchange_failed" };
+    }
+
+    await ctx.runMutation(
+      internal.lib.upsertInstallation,
+      parseOAuthAccessResponse(json),
+    );
+    return { ok: true as const, successUrl: process.env.SLACK_INSTALL_SUCCESS_URL };
   },
 });
 

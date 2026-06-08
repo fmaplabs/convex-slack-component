@@ -132,23 +132,93 @@ See more example usage in [example.ts](./example/convex/example.ts).
 
 ### HTTP Routes
 
-Pass an `httpPrefix` to the same `app.use(slack, ...)` call to mount the
-component's HTTP routes under that prefix:
+The Slack client exposes HTTP **handlers** that you mount from your own
+`convex/http.ts` — your app owns the route paths (no `httpPrefix` config):
 
 ```ts
-// convex/convex.config.ts
-app.use(slack, {
-  httpPrefix: "/slack/",
-  env: {
-    SLACK_WEBHOOK_URL: app.env.SLACK_WEBHOOK_URL,
-    SLACK_BOT_TOKEN: app.env.SLACK_BOT_TOKEN,
-    SLACK_DEFAULT_CHANNEL: app.env.SLACK_DEFAULT_CHANNEL,
-  },
+// convex/http.ts
+import { httpRouter } from "convex/server";
+import { httpAction } from "./_generated/server";
+import { slack } from "./example"; // wherever you construct `new Slack(...)`
+
+const http = httpRouter();
+
+// "Add to Slack" install + OAuth callback (see "OAuth installation" below).
+http.route({
+  path: "/slack/install",
+  method: "GET",
+  handler: httpAction((ctx, req) => slack.handleInstall(ctx, req)),
+});
+http.route({
+  path: "/slack/oauth_redirect",
+  method: "GET",
+  handler: httpAction((ctx, req) => slack.handleOAuthRedirect(ctx, req)),
+});
+
+export default http;
+```
+
+The handlers run in your app's `httpAction` and delegate to the component (which
+still reads its own bound env — no credentials pass through the client). Mount
+the OAuth callback as a sibling named `oauth_redirect`.
+
+## OAuth installation ("Add to Slack")
+
+The transports above use a single token you paste once. To let **end users
+install your app into their own Slack workspace** — each getting its own bot
+token — use the OAuth v2 flow. This mounts two more HTTP routes under your
+`httpPrefix` and stores a per-workspace installation.
+
+**1. Configure the Slack app.** In your app's settings at api.slack.com:
+
+- Under **OAuth & Permissions → Redirect URLs**, add
+  `<your-site>/slack/oauth_redirect` (the `.convex.site` origin + your
+  `httpPrefix` + `oauth_redirect`). It must byte-match exactly.
+- Add the **Bot Token Scopes** you need (at minimum `chat:write`).
+- Copy the **Client ID** and **Client Secret**.
+
+**2. Set the env vars** (bound through `app.use(slack, { env })` alongside the
+others — see the example app's `convex.config.ts`):
+
+```sh
+npx convex env set SLACK_CLIENT_ID     <client-id>
+npx convex env set SLACK_CLIENT_SECRET <client-secret>
+npx convex env set SLACK_SCOPES        chat:write
+# optional: where to send the browser after a successful install
+npx convex env set SLACK_INSTALL_SUCCESS_URL https://your-app.example.com/installed
+```
+
+All optional — with `SLACK_CLIENT_ID`/`SLACK_CLIENT_SECRET` unset, the install
+routes return a clear "not configured" message and `oauth` sends no-op.
+
+**3. Mount the routes and render the install link.** Mount `handleInstall` /
+`handleOAuthRedirect` in your `convex/http.ts` (see [HTTP Routes](#http-routes)
+above). Then point a button at `slack.installUrl(siteUrl)` — where `siteUrl` is
+your `CONVEX_SITE_URL` (the `.convex.site` origin) — which builds
+`<site>/slack/install`. Hitting it 302s the user to Slack's consent screen; on
+approval Slack calls your `oauth_redirect` route, which exchanges the `code` for
+the workspace's bot token and stores an installation row.
+
+**4. Send to an installed workspace.** OAuth is multi-tenant, so `send` requires
+an explicit `teamId` — there's no ambiguous auto-select:
+
+```ts
+await slack.send(ctx, {
+  text: "Build finished ✅",
+  teamId: "T0123ABCD", // the installed workspace's team id
+  transport: "oauth",
 });
 ```
 
-With the prefix above the component exposes `GET /slack/last`, which returns the
-most recent send as JSON.
+The token is looked up at delivery time, so reinstalls are picked up
+automatically. A missing installation fails the message with `no_installation`
+(no retries).
+
+> **Token storage:** bot tokens are stored **in plaintext** in the component's
+> `installations` table — the same as any database-backed Slack
+> `InstallationStore`. If your threat model requires encryption at rest, encrypt
+> before storage; the schema leaves room (`refreshToken`/`expiresAt`) for future
+> token rotation.
 
 <!-- END: Include on https://convex.dev/components -->
 

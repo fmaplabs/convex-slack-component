@@ -4,7 +4,8 @@ import { Slack } from "@fmaplabs/convex-slack";
 import { v } from "convex/values";
 
 // One Slack client for the app. No credentials here — the component reads the
-// env vars bound in convex.config.ts.
+// env vars bound in convex.config.ts. HTTP routes are mounted by the app in
+// convex/http.ts (see that file), so there's no httpPrefix to configure.
 export const slack = new Slack(components.slack);
 
 type LifecycleEvent = {
@@ -32,8 +33,15 @@ function lifecycleMessage(e: LifecycleEvent): { text: string; blocks: unknown[] 
     `Contract: #${e.contractId}`,
   ].join("\n");
 
-  const contractField = e.contractUrl
-    ? `*Contract:*\n<${e.contractUrl}|#${e.contractId} ↗ open in cargo>`
+  // Slack only renders `<url|label>` as a link when `url` is absolute (has an
+  // http(s):// scheme). A scheme-less URL is shown literally — so normalize it.
+  const href = e.contractUrl
+    ? /^https?:\/\//.test(e.contractUrl)
+      ? e.contractUrl
+      : `https://${e.contractUrl}`
+    : undefined;
+  const contractField = href
+    ? `*Contract:*\n<${href}|#${e.contractId} ↗ open in cargo>`
     : `*Contract:*\n#${e.contractId}`;
 
   const blocks = [
@@ -96,6 +104,24 @@ export const notifyCancel = mutation({
       text,
       blocks,
       idempotencyKey: `demo-cancel:123:${Date.now()}`,
+    });
+  },
+});
+
+/**
+ * Deliver to a specific installed workspace via the OAuth transport. After a
+ * user completes the "Add to Slack" flow, the component has that workspace's
+ * own bot token keyed by `teamId` — pass it here to address the right install.
+ */
+export const notifyOAuth = mutation({
+  args: { teamId: v.string() },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, { teamId }) => {
+    return await slack.send(ctx, {
+      text: "👋 Hello from the OAuth transport — sent with this workspace's own bot token.",
+      teamId,
+      transport: "oauth",
+      idempotencyKey: `demo-oauth:${teamId}:${Date.now()}`,
     });
   },
 });

@@ -1,4 +1,5 @@
 import "./App.css";
+import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 
@@ -9,10 +10,20 @@ const STATUS_LABEL: Record<string, string> = {
   skipped: "⏭️ skipped",
 };
 
+// HTTP Actions live on the `.convex.site` origin; the React client is given the
+// `.convex.cloud` URL. Derive the install link from it.
+const SITE_URL = (import.meta.env.VITE_CONVEX_URL as string | undefined)?.replace(
+  ".convex.cloud",
+  ".convex.site",
+);
+const INSTALL_URL = SITE_URL ? `${SITE_URL}/slack/install` : undefined;
+
 function App() {
   const notifySkip = useMutation(api.example.notifySkip);
   const notifyCancel = useMutation(api.example.notifyCancel);
+  const notifyOAuth = useMutation(api.example.notifyOAuth);
   const recent = useQuery(api.example.recentNotifications, { limit: 20 });
+  const [teamId, setTeamId] = useState("");
 
   return (
     <main style={{ maxWidth: 720, margin: "0 auto", textAlign: "left" }}>
@@ -51,6 +62,60 @@ function App() {
           }}
         >
           🛑 Notify “cancelled”
+        </button>
+      </div>
+
+      <h2 style={{ fontSize: "1.1rem" }}>OAuth installation</h2>
+      <p style={{ color: "#444" }}>
+        Set <code>SLACK_CLIENT_ID</code>, <code>SLACK_CLIENT_SECRET</code>, and{" "}
+        <code>SLACK_SCOPES</code> (e.g. <code>chat:write</code>), register{" "}
+        <code>{SITE_URL ? `${SITE_URL}/slack/oauth_redirect` : "<site>/slack/oauth_redirect"}</code>{" "}
+        as your Slack app's redirect URL, then click below to install into a
+        workspace. After installing, paste that workspace's team id (e.g.{" "}
+        <code>T0123ABCD</code>) to send a message with its own bot token.
+      </p>
+
+      <div style={{ display: "flex", gap: "0.75rem", margin: "1rem 0", flexWrap: "wrap", alignItems: "center" }}>
+        {INSTALL_URL ? (
+          <a
+            href={INSTALL_URL}
+            style={{
+              padding: "0.6rem 1.1rem",
+              background: "#4a154b",
+              color: "#fff",
+              borderRadius: 6,
+              textDecoration: "none",
+            }}
+          >
+            ➕ Add to Slack
+          </a>
+        ) : (
+          <span style={{ color: "#9b1c1c" }}>VITE_CONVEX_URL not set</span>
+        )}
+        <input
+          value={teamId}
+          onChange={(e) => setTeamId(e.target.value)}
+          placeholder="Team id (e.g. T0123ABCD)"
+          style={{
+            padding: "0.55rem 0.7rem",
+            border: "1px solid #b0b0b0",
+            borderRadius: 6,
+            minWidth: 220,
+          }}
+        />
+        <button
+          disabled={teamId.trim() === ""}
+          onClick={() => void notifyOAuth({ teamId: teamId.trim() })}
+          style={{
+            padding: "0.6rem 1.1rem",
+            background: teamId.trim() === "" ? "#9aa0a6" : "#1264a3",
+            color: "#fff",
+            border: "none",
+            borderRadius: 6,
+            cursor: teamId.trim() === "" ? "not-allowed" : "pointer",
+          }}
+        >
+          📨 Send via OAuth
         </button>
       </div>
 
