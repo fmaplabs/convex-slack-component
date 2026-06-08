@@ -1,35 +1,19 @@
 import { httpRouter } from "convex/server";
-import { api } from "./_generated/api";
-import { httpAction } from "./_generated/server";
+import { api } from "./_generated/api.js";
+import { httpAction } from "./_generated/server.js";
 
 const http = httpRouter();
 
 http.route({
-  // this will be mounted under the app's httpPrefix, as defined in the app's convex.config.ts
+  // Mounted under the app's httpPrefix, as defined in the app's convex.config.ts.
   path: `/last`,
   method: "GET",
-  handler: httpAction(async (ctx, request) => {
-    const targetId = new URL(request.url).searchParams.get("targetId");
-    if (!targetId) {
-      return new Response(
-        JSON.stringify({ error: "targetId parameter required" }),
-        {
-          status: 400,
-          headers: {
-            "Content-Type": "application/json",
-          },
-        },
-      );
-    }
-    const comments = await ctx.runQuery(api.lib.list, {
-      targetId,
-    });
-    const lastComment = comments[0] ?? null;
-    return new Response(JSON.stringify(lastComment), {
+  handler: httpAction(async (ctx) => {
+    const messages = await ctx.runQuery(api.lib.list, { limit: 1 });
+    const last = messages[0] ?? null;
+    return new Response(JSON.stringify(last), {
       status: 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
     });
   }),
 });
