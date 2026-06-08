@@ -28,10 +28,10 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "mutation",
         "internal",
         {
-          text?: string;
           blocks?: any;
           channel?: string;
           idempotencyKey?: string;
+          text?: string;
           transport?: "webhook" | "botToken";
         },
         string | null,
@@ -44,16 +44,16 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         Array<{
           _creationTime: number;
           _id: string;
-          text?: string;
           blocks?: any;
           channel?: string;
-          transport: "webhook" | "botToken";
-          idempotencyKey?: string;
-          status: "pending" | "sent" | "failed" | "skipped";
-          workId?: string;
-          httpStatus?: number;
           error?: string;
+          httpStatus?: number;
+          idempotencyKey?: string;
           slackTs?: string;
+          status: "pending" | "sent" | "failed" | "skipped";
+          text?: string;
+          transport: "webhook" | "botToken";
+          workId?: string;
         }>,
         Name
       >;

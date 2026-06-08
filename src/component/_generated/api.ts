@@ -11,7 +11,6 @@
 import type * as http from "../http.js";
 import type * as lib from "../lib.js";
 
-import type { ComponentApi as SendWorkpoolApi } from "@convex-dev/workpool/_generated/component.js";
 import type {
   ApiFromModules,
   FilterApi,
@@ -51,5 +50,5 @@ export const internal: FilterApi<
 > = anyApi as any;
 
 export const components = componentsGeneric() as unknown as {
-  sendWorkpool: SendWorkpoolApi;
+  sendWorkpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"sendWorkpool">;
 };
