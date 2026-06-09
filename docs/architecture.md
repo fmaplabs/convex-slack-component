@@ -7,7 +7,7 @@ A reusable Convex component for durable Slack notifications. The component owns
 
 | Layer | Lives in | Responsibility |
 | --- | --- | --- |
-| **Client** `src/client/index.ts` | published | `Slack` class — a thin wrapper that runs the component's `enqueue`/`list` from an app mutation/action, plus `handleInstall`/`handleOAuthRedirect` Response-shapers the app mounts in its own `http.ts`. No credentials pass through it. |
+| **Client** `src/client/index.ts` | published | `Slack` class — a thin wrapper that runs the component's `enqueue`/`list`/`listInstallations` from an app mutation/action, plus `handleInstall`/`handleOAuthRedirect` Response-shapers the app mounts in its own `http.ts`. No credentials pass through it. |
 | **Component** `src/component/` | published | transactional `enqueue`; durable retried `send`; webhook + bot-token + oauth transports; OAuth install flow (`installRedirect`/`completeOAuth`); `messages` log + idempotency; `installations`/`oauthStates`; reads its **declared** env vars. |
 | **Child workpool** | nested in the component (`sendWorkpool`) | retry/backoff + concurrency for sends; reports terminal outcome via `onComplete`. |
 | **Consumer code** | the app (e.g. fmap `packages/backend`) | builds Block Kit, picks an idempotency key, calls `slack.send(...)` from its own lifecycle chokepoints. See `consumer-integration.md`. |

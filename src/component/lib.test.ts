@@ -475,3 +475,48 @@ describe("oauth installation flow", () => {
     ).rejects.toThrow(/teamId/);
   });
 });
+
+describe("listInstallations (token-free read)", () => {
+  test("lists workspaces newest-first, never exposing the bot token", async () => {
+    const t = initConvexTest();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("installations", {
+        teamId: "T-old",
+        isEnterpriseInstall: false,
+        botToken: "xoxb-old-secret",
+        botUserId: "U-old",
+        scope: "chat:write",
+        installedAt: 1000,
+      });
+      await ctx.db.insert("installations", {
+        teamId: "T-new",
+        isEnterpriseInstall: false,
+        botToken: "xoxb-new-secret",
+        botUserId: "U-new",
+        scope: "chat:write,channels:read",
+        installedAt: 2000,
+      });
+    });
+
+    const installs = await t.query(api.lib.listInstallations, {});
+
+    // Newest install first.
+    expect(installs.map((i) => i.teamId)).toEqual(["T-new", "T-old"]);
+    expect(installs[0]).toMatchObject({
+      teamId: "T-new",
+      botUserId: "U-new",
+      scope: "chat:write,channels:read",
+      isEnterpriseInstall: false,
+      installedAt: 2000,
+    });
+    // The bot token must never cross the public boundary.
+    for (const i of installs) {
+      expect(i).not.toHaveProperty("botToken");
+    }
+  });
+
+  test("no installations → empty array", async () => {
+    const t = initConvexTest();
+    expect(await t.query(api.lib.listInstallations, {})).toEqual([]);
+  });
+});

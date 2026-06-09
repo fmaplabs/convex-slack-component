@@ -73,5 +73,21 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         }>,
         Name
       >;
+      listInstallations: FunctionReference<
+        "query",
+        "internal",
+        Record<string, never>,
+        Array<{
+          appId?: string;
+          authedUserId?: string;
+          botUserId?: string;
+          enterpriseId?: string;
+          installedAt: number;
+          isEnterpriseInstall: boolean;
+          scope?: string;
+          teamId?: string;
+        }>,
+        Name
+      >;
     };
   };

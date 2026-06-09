@@ -6,7 +6,7 @@ import {
   type ApiFromModules,
 } from "convex/server";
 import { v } from "convex/values";
-import { Slack, type RunActionCtx } from "./index.js";
+import { Slack, type RunActionCtx, type RunQueryCtx } from "./index.js";
 import type { ComponentApi } from "../component/_generated/component.js";
 import { components, initConvexTest } from "./setup.test.js";
 
@@ -197,5 +197,23 @@ describe("handleOAuthRedirect", () => {
     );
     expect(res.status).toBe(400);
     expect(await res.text()).toContain("bad_code");
+  });
+});
+
+describe("listInstallations", () => {
+  test("delegates to the component query and returns its token-free rows", async () => {
+    const rows = [
+      { teamId: "T1", isEnterpriseInstall: false, installedAt: 1, scope: "chat:write" },
+    ];
+    const runQuery = vi.fn().mockResolvedValue(rows);
+    const slack = new Slack({
+      lib: { listInstallations: "listInstallations-ref" },
+    } as unknown as ComponentApi);
+    const ctx = { runQuery } as unknown as RunQueryCtx;
+
+    const result = await slack.listInstallations(ctx);
+
+    expect(runQuery).toHaveBeenCalledWith("listInstallations-ref", {});
+    expect(result).toEqual(rows);
   });
 });

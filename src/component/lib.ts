@@ -503,6 +503,57 @@ export const getInstallationToken = internalQuery({
 });
 
 /**
+ * Public, token-free projection of an installation: everything Slack returned at
+ * install time *except* the bot token (and the reserved rotation secrets). Safe to
+ * expose to the host app and, through it, to a client.
+ */
+const vInstallationView = v.object({
+  teamId: v.optional(v.string()),
+  enterpriseId: v.optional(v.string()),
+  isEnterpriseInstall: v.boolean(),
+  botUserId: v.optional(v.string()),
+  appId: v.optional(v.string()),
+  scope: v.optional(v.string()),
+  authedUserId: v.optional(v.string()),
+  installedAt: v.number(),
+});
+
+/**
+ * List installed workspaces, newest install first — **without** the bot token.
+ *
+ * The token-bearing read (`getInstallationToken`) is deliberately internal; this is
+ * its host-facing counterpart. It lets the app discover the `teamId` to pass to
+ * `send({ transport: "oauth", teamId })` (instead of asking a human to type it) and
+ * show that an install has completed — it's reactive, updating the moment one
+ * completes or is replaced. (It reflects installs, not uninstalls: there's no
+ * `app_uninstalled` handling yet, so read it as "installed at least once," not
+ * "connected right now.") The token never crosses this boundary: the returns
+ * validator only permits the fields above, so adding one is a deliberate act.
+ *
+ * Multi-tenant by design: single-workspace apps take the first entry; multi-tenant
+ * hosts map each `teamId` to their own account model.
+ */
+export const listInstallations = query({
+  args: {},
+  returns: v.array(vInstallationView),
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("installations").collect();
+    return rows
+      .sort((a, b) => b.installedAt - a.installedAt)
+      .map((r) => ({
+        teamId: r.teamId,
+        enterpriseId: r.enterpriseId,
+        isEnterpriseInstall: r.isEnterpriseInstall,
+        botUserId: r.botUserId,
+        appId: r.appId,
+        scope: r.scope,
+        authedUserId: r.authedUserId,
+        installedAt: r.installedAt,
+      }));
+  },
+});
+
+/**
  * Begin the "Add to Slack" flow. The host app's HTTP route calls this from its
  * own `httpAction` (via `slack.handleInstall`) and 302s the user to `location`.
  *

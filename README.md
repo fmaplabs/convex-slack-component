@@ -214,6 +214,20 @@ The token is looked up at delivery time, so reinstalls are picked up
 automatically. A missing installation fails the message with `no_installation`
 (no retries).
 
+Rather than hardcoding the `teamId`, discover it with `slack.listInstallations(ctx)`
+— a reactive, **token-free** read of the installed workspaces (it never returns the
+bot token). Take the first entry for a single workspace, or map each `teamId` to your
+own account model. It also shows an install has completed — but it reflects installs,
+not uninstalls (no `app_uninstalled` handling yet), so read it as "installed at least
+once," not "connected right now":
+
+```ts
+const [install] = await slack.listInstallations(ctx);
+if (install) {
+  await slack.send(ctx, { text: "Build finished ✅", teamId: install.teamId, transport: "oauth" });
+}
+```
+
 > **Token storage:** bot tokens are stored **in plaintext** in the component's
 > `installations` table — the same as any database-backed Slack
 > `InstallationStore`. If your threat model requires encryption at rest, encrypt

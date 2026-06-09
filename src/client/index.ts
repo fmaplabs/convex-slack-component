@@ -61,6 +61,26 @@ export type SlackMessage = {
 };
 
 /**
+ * Token-free metadata for one installed workspace. Mirrors the component's
+ * `listInstallations` return — the bot token is **never** included.
+ */
+export type SlackInstallation = {
+  /** Workspace id (`T…`) for a single-workspace install. */
+  teamId?: string;
+  /** Org id (`E…`) for an enterprise / org-wide install. */
+  enterpriseId?: string;
+  isEnterpriseInstall: boolean;
+  /** The installed bot user (`U…`). */
+  botUserId?: string;
+  appId?: string;
+  /** Granted bot scopes, comma-separated. */
+  scope?: string;
+  authedUserId?: string;
+  /** Epoch ms of the (most recent) install. */
+  installedAt: number;
+};
+
+/**
  * Thin client over the Slack component.
  *
  * No credentials are ever passed through here — the component reads its own
@@ -94,6 +114,23 @@ export class Slack {
   /** Recent logged messages, most recent first. */
   listRecent(ctx: RunQueryCtx, limit?: number) {
     return ctx.runQuery(this.component.lib.list, { limit });
+  }
+
+  /**
+   * List installed Slack workspaces (token-free metadata), newest install first.
+   *
+   * Reactive — re-runs when an install completes or is replaced. Use it to discover
+   * the `teamId` to pass to `send({ transport: "oauth", teamId })` instead of asking
+   * a human to type it, or to show that an install has completed. (It reflects
+   * installs, not uninstalls — there's no `app_uninstalled` handling yet — so read it
+   * as "installed at least once," not "connected right now.") The bot token is never
+   * exposed; it stays internal to the component.
+   *
+   * Single-workspace apps can take the first entry; multi-tenant hosts map each
+   * `teamId` to their own account model.
+   */
+  listInstallations(ctx: RunQueryCtx): Promise<SlackInstallation[]> {
+    return ctx.runQuery(this.component.lib.listInstallations, {});
   }
 
   /**

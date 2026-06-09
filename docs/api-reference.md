@@ -50,6 +50,17 @@ transport is configured.
 `ctx`: anything with `runQuery`. Returns recent `messages` rows, newest first
 (`limit` default 100).
 
+### `listInstallations(ctx): Promise<SlackInstallation[]>`
+`ctx`: anything with `runQuery`. Lists installed workspaces, newest install first,
+as **token-free** metadata (`teamId`, `enterpriseId`, `isEnterpriseInstall`,
+`botUserId`, `appId`, `scope`, `authedUserId`, `installedAt`) — the bot token is
+never exposed. Reactive: re-runs when an install completes or is replaced. Use it to
+discover the `teamId` for an `oauth` send (instead of asking a human to type it), or
+to show that an install has completed. It reflects installs, not uninstalls (there's
+no `app_uninstalled` handling yet), so read it as "installed at least once," not
+"connected right now." Single-workspace apps take the first entry; multi-tenant hosts
+map each `teamId` to their own account model.
+
 ### `installUrl(convexSiteUrl, installPath?)`
 Builds the "Add to Slack" link to render in your app. `convexSiteUrl` is your
 `CONVEX_SITE_URL` (the `.convex.site` origin); `installPath` is wherever you
@@ -88,6 +99,12 @@ inserts a `pending` row, schedules `send` through the workpool, returns the id (
 
 ### `list` — `query` → `Message[]`
 Args: `{ limit? }`. Newest-first.
+
+### `listInstallations` — `query` → `Installation[]` (token-free)
+Args: `{}`. Lists installed workspaces newest-first, **without** the bot token
+(`teamId`, `enterpriseId`, `isEnterpriseInstall`, `botUserId`, `appId`, `scope`,
+`authedUserId`, `installedAt`). The token-bearing read (`getInstallationToken`)
+stays internal; this is its safe, host-facing counterpart.
 
 ### `installRedirect` — `action` → `{ location } | { error }`
 Args: `{ redirectUri }`. Reads the OAuth env, generates a CSRF `state` (Web Crypto),
@@ -128,7 +145,8 @@ installation. Errors: `invalid_or_expired_state`, `not_configured`, or Slack's o
 
 ## `installations` table
 One row per installed workspace (or org). Written by `completeOAuth`, read at
-delivery time by `send`. Indexes: `by_teamId`, `by_enterpriseId`.
+delivery time by `send` (token, internal) and listed by `listInstallations`
+(token-free, host-facing). Indexes: `by_teamId`, `by_enterpriseId`.
 
 | field | type | |
 | --- | --- | --- |
