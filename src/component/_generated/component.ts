@@ -76,7 +76,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       listInstallations: FunctionReference<
         "query",
         "internal",
-        Record<string, never>,
+        {},
         Array<{
           appId?: string;
           authedUserId?: string;
