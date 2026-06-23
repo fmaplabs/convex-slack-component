@@ -1,20 +1,20 @@
-import type {
-  GenericActionCtx,
-  GenericDataModel,
-  GenericMutationCtx,
-  GenericQueryCtx,
-} from "convex/server";
+import type { GenericActionCtx, GenericDataModel } from "convex/server";
 import type { ComponentApi } from "../component/_generated/component.js";
 
 // See example/convex/example.ts for how to use this component.
 
 // Convenient `ctx` aliases that only require the methods we actually call.
 // A mutation, action, or query ctx all satisfy these structurally.
+//
+// All based on `GenericActionCtx` (the loosest run* signatures) on purpose:
+// convex 1.41 added a `transactionLimits` option to query/mutation-ctx run*
+// methods that action ctx lacks, so basing these on query/mutation ctx would
+// reject callers passing an action ctx.
 export type RunMutationCtx = Pick<
-  GenericMutationCtx<GenericDataModel>,
+  GenericActionCtx<GenericDataModel>,
   "runMutation"
 >;
-export type RunQueryCtx = Pick<GenericQueryCtx<GenericDataModel>, "runQuery">;
+export type RunQueryCtx = Pick<GenericActionCtx<GenericDataModel>, "runQuery">;
 export type RunActionCtx = Pick<GenericActionCtx<GenericDataModel>, "runAction">;
 
 function htmlResponse(body: string, status = 200): Response {
